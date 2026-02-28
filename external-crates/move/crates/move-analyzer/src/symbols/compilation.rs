@@ -363,16 +363,6 @@ impl CachingResult {
             .collect()
     }
 
-    /// Returns all files (dependency + user) that need full compilation as PathBuf.
-    fn get_all_files_to_compile_fully(&self) -> BTreeSet<PathBuf> {
-        let mut all_files: BTreeSet<PathBuf> = self
-            .dep_files_to_compile_fully
-            .iter()
-            .map(|s| PathBuf::from(s.as_str()))
-            .collect();
-        all_files.extend(self.user_files_to_compile_fully.clone());
-        all_files
-    }
 }
 
 /// Builds a package at a given path and, if successful, returns parsed AST
@@ -676,15 +666,11 @@ pub fn get_compiled_pkg<F: MoveFlavor>(
                     .set_ide_mode()
                     .filter_dep_package_targets(&caching_result.get_files_to_exclude_from_targets())
                     .set_pre_compiled_program_opt(caching_result.get_filtered_precompiled())
-                    .set_files_to_compile(if full_compilation {
-                        None
-                    } else {
-                        // Include both modified user files and files containing extended modules
-                        // (both dependency and user-space) to ensure function bodies are preserved
-                        let mut all_files = files_to_compile.clone();
-                        all_files.extend(caching_result.get_all_files_to_compile_fully());
-                        Some(all_files)
-                    })
+                    // Always pass None so all user files retain full function bodies.
+                    // Passing Some(files) causes the compiler to mark non-listed user
+                    // files as External(Library) with Native bodies, which suppresses
+                    // diagnostics for type errors and other semantic issues.
+                    .set_files_to_compile(None)
                     .run::<PASS_PARSER>()?;
                 let compiler = match compilation_result {
                     Ok(v) => v,
@@ -750,10 +736,8 @@ pub fn get_compiled_pkg<F: MoveFlavor>(
         )?;
 
         if let Some((compiler_diagnostics, failure)) = diagnostics {
-            lsp_diags = lsp_diagnostics(
-                &compiler_diagnostics.into_codespan_format(),
-                &mapped_files_data.files,
-            );
+            let codespan_diags = compiler_diagnostics.into_codespan_format();
+            lsp_diags = lsp_diagnostics(&codespan_diags, &mapped_files_data.files);
             if failure {
                 // just return diagnostics as we don't have typed AST that we can use to compute
                 // symbolication information
