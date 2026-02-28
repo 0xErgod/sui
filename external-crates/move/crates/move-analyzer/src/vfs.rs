@@ -54,6 +54,14 @@ pub fn on_text_document_sync_notification(
     symbolicator_runner: &SymbolicatorRunner,
     notification: &Notification,
 ) {
+    /// Canonicalize the file path so the VFS key matches what the compiler uses
+    /// (dunce::canonicalize). On Windows, URI::to_file_path() may produce a
+    /// lowercase drive letter (e.g. "z:\...") while dunce produces uppercase
+    /// ("Z:\..."), causing the MemoryFS lookup to miss.
+    fn canonicalize_path(file_path: PathBuf) -> PathBuf {
+        dunce::canonicalize(&file_path).unwrap_or(file_path)
+    }
+
     fn vfs_file_create(
         ide_files: &VfsPath,
         file_path: PathBuf,
@@ -96,7 +104,7 @@ pub fn on_text_document_sync_notification(
             let parameters =
                 serde_json::from_value::<DidOpenTextDocumentParams>(notification.params.clone())
                     .expect("could not deserialize notification");
-            let Some(file_path) = parameters.text_document.uri.to_file_path().ok() else {
+            let Some(file_path) = parameters.text_document.uri.to_file_path().ok().map(canonicalize_path) else {
                 eprintln!(
                     "Could not create file path from URI {:?}",
                     parameters.text_document.uri
@@ -122,7 +130,7 @@ pub fn on_text_document_sync_notification(
                 serde_json::from_value::<DidChangeTextDocumentParams>(notification.params.clone())
                     .expect("could not deserialize notification");
 
-            let Some(file_path) = parameters.text_document.uri.to_file_path().ok() else {
+            let Some(file_path) = parameters.text_document.uri.to_file_path().ok().map(canonicalize_path) else {
                 eprintln!(
                     "Could not create file path from URI {:?}",
                     parameters.text_document.uri
@@ -148,7 +156,7 @@ pub fn on_text_document_sync_notification(
             let parameters =
                 serde_json::from_value::<DidSaveTextDocumentParams>(notification.params.clone())
                     .expect("could not deserialize notification");
-            let Some(file_path) = parameters.text_document.uri.to_file_path().ok() else {
+            let Some(file_path) = parameters.text_document.uri.to_file_path().ok().map(canonicalize_path) else {
                 eprintln!(
                     "Could not create file path from URI {:?}",
                     parameters.text_document.uri
@@ -166,7 +174,9 @@ pub fn on_text_document_sync_notification(
                 eprintln!("Could not read saved file change");
                 return;
             };
-            if vfs_file.write_all(content.as_bytes()).is_err() {
+            if vfs_file.write_all(content.as_bytes()).is_ok() {
+                symbolicator_runner.run(file_path);
+            } else {
                 // try to remove file from the file system and schedule symbolicator to pick up
                 // changes from the file system
                 vfs_file_remove(&ide_files_root, file_path.clone());
@@ -177,7 +187,7 @@ pub fn on_text_document_sync_notification(
             let parameters =
                 serde_json::from_value::<DidCloseTextDocumentParams>(notification.params.clone())
                     .expect("could not deserialize notification");
-            let Some(file_path) = parameters.text_document.uri.to_file_path().ok() else {
+            let Some(file_path) = parameters.text_document.uri.to_file_path().ok().map(canonicalize_path) else {
                 eprintln!(
                     "Could not create file path from URI {:?}",
                     parameters.text_document.uri
